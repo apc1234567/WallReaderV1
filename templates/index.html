@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WallReader</title>
+<style>
+  :root {
+    --bg:      #0f1117;
+    --panel:   #1a1d27;
+    --border:  #2e3248;
+    --accent:  #4f8ef7;
+    --text:    #d4d8f0;
+    --dim:     #6b7094;
+    --green:   #4caf78;
+    --gold:    #e8b84b;
+    --red:     #e85b5b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Consolas', 'Courier New', monospace; font-size: 13px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .page { max-width: 1500px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 18px; font-weight: bold; color: var(--accent); margin-bottom: 12px; }
+
+  /* Control panel */
+  .controls {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: flex-end;
+    margin-bottom: 12px;
+  }
+  .field { display: flex; flex-direction: column; gap: 3px; }
+  .field label { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.05em; }
+  .field input, .field select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    padding: 5px 8px;
+    font-family: inherit;
+    font-size: 13px;
+  }
+  .field input:focus, .field select:focus { outline: 1px solid var(--accent); }
+  .field.url-field input { width: 420px; }
+  .field.ckpt-field input { width: 280px; }
+
+  button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 14px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: bold;
+    transition: opacity 0.15s;
+  }
+  button:hover  { opacity: 0.85; }
+  button:disabled { opacity: 0.35; cursor: default; }
+  button.secondary {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+
+  /* Status / error */
+  #status-bar {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 7px 12px;
+    margin-bottom: 10px;
+    color: var(--dim);
+    display: none;
+  }
+  #status-bar.error { border-color: var(--red); color: var(--red); }
+  #status-bar.info  { display: block; }
+
+  /* Turn nav */
+  .turn-nav {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 9px 14px;
+    margin-bottom: 12px;
+  }
+  #turn-counter { font-weight: bold; color: var(--accent); min-width: 100px; }
+  #live-tiles   { color: var(--dim); min-width: 110px; }
+  #own-hand     { flex: 1; color: var(--gold); }
+  #replay-link  { margin-left: auto; white-space: nowrap; }
+
+  /* Opponent grid */
+  .opp-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  /* Table card */
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .card-title {
+    background: #22263a;
+    padding: 7px 12px;
+    font-weight: bold;
+    font-size: 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .card-title .mae { color: var(--dim); font-weight: normal; font-size: 11px; }
+  .card-body { overflow-x: auto; }
+
+  /* Probability table */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 11.5px;
+  }
+  th {
+    background: #1e2235;
+    color: var(--dim);
+    padding: 4px 6px;
+    text-align: right;
+    position: sticky;
+    top: 0;
+    white-space: nowrap;
+  }
+  th:first-child { text-align: left; }
+  td {
+    padding: 2px 6px;
+    text-align: right;
+    border-bottom: 1px solid #1e2235;
+    white-space: nowrap;
+  }
+  td:first-child { text-align: left; }
+  tr.suit-header td {
+    background: #1e2235;
+    color: var(--dim);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 3px 6px;
+    border: none;
+  }
+  .true-pos  { color: var(--green); font-weight: bold; }
+  .true-mark { outline: 2px solid var(--gold); outline-offset: -2px; }
+  .wall-section { margin-bottom: 10px; }
+
+  /* Responsive */
+  @media (max-width: 1100px) { .opp-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 750px)  { .opp-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>WallReader — Opponent Inference</h1>
+
+  <!-- Controls -->
+  <div class="controls">
+    <div class="field url-field">
+      <label>Tenhou Log URL</label>
+      <input id="url" type="text" placeholder="https://tenhou.net/4/?log=..." spellcheck="false">
+    </div>
+    <div class="field">
+      <label>Player (POV)</label>
+      <select id="player">
+        <option value="0">0</option><option value="1">1</option>
+        <option value="2">2</option><option value="3">3</option>
+      </select>
+    </div>
+    <div class="field ckpt-field">
+      <label>Checkpoint</label>
+      <input id="checkpoint" type="text" value="trained/100k4epochs.pt">
+    </div>
+    <div class="field" style="align-self:flex-end">
+      <button onclick="loadRounds()">Load Game</button>
+    </div>
+    <div class="field" id="kyoku-field" style="display:none">
+      <label>Kyoku</label>
+      <select id="kyoku-select" onchange="runInference()"></select>
+    </div>
+  </div>
+
+  <!-- Status bar -->
+  <div id="status-bar"></div>
+
+  <!-- Turn navigation (hidden until inference runs) -->
+  <div class="turn-nav" id="turn-nav" style="display:none">
+    <button class="secondary" id="prev-btn" disabled>&#8592; Prev</button>
+    <span id="turn-counter">Turn 1 / 1</span>
+    <button class="secondary" id="next-btn" disabled>Next &#8594;</button>
+    <span id="live-tiles"></span>
+    <span>Hand: <span id="own-hand"></span></span>
+    <a id="replay-link" href="#" target="_blank" style="display:none">Open replay &#8599;</a>
+  </div>
+
+  <!-- Opponent tables -->
+  <div class="opp-grid" id="opp-grid"></div>
+
+  <!-- Wall table -->
+  <div class="wall-section" id="wall-section"></div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+const TILE_NAMES = [
+  '1m','2m','3m','4m','5m','6m','7m','8m','9m',
+  '1p','2p','3p','4p','5p','6p','7p','8p','9p',
+  '1s','2s','3s','4s','5s','6s','7s','8s','9s',
+  'East','South','West','North','Haku','Hatsu','Chun',
+  'r5m','r5p','r5s'
+];
+const SUITS = [
+  { name: 'Man',    start: 0,  end: 9  },
+  { name: 'Pin',    start: 9,  end: 18 },
+  { name: 'Sou',    start: 18, end: 27 },
+  { name: 'Honors', start: 27, end: 34 },
+  { name: 'Red 5',  start: 34, end: 37 },
+];
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let turnsData   = [];
+let currentTurn = 0;
+let logId       = '';
+
+// ---------------------------------------------------------------------------
+// API calls
+// ---------------------------------------------------------------------------
+async function loadRounds() {
+  const url = document.getElementById('url').value.trim();
+  if (!url) { showStatus('Please enter a log URL.', true); return; }
+  showStatus('Fetching game log...', false);
+  try {
+    const res  = await fetch('/api/rounds', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ url }),
+    });
+    const data = await res.json();
+    if (data.error) { showStatus('Error: ' + data.error, true); return; }
+
+    logId = data.log_id;
+    const sel = document.getElementById('kyoku-select');
+    sel.innerHTML = '';
+    for (const r of data.rounds) {
+      const opt = document.createElement('option');
+      opt.value = JSON.stringify({ kyoku_idx: r.kyoku_idx, honba: r.honba });
+      opt.textContent = r.name;
+      sel.appendChild(opt);
+    }
+    document.getElementById('kyoku-field').style.display = '';
+    showStatus(`Loaded ${data.rounds.length} round(s). Select a kyoku to run inference.`, false);
+    runInference();
+  } catch (e) {
+    showStatus('Network error: ' + e.message, true);
+  }
+}
+
+async function runInference() {
+  const url        = document.getElementById('url').value.trim();
+  const player     = parseInt(document.getElementById('player').value);
+  const checkpoint = document.getElementById('checkpoint').value.trim();
+  const sel        = document.getElementById('kyoku-select');
+  if (!sel.value) return;
+
+  const { kyoku_idx, honba } = JSON.parse(sel.value);
+  const kyokuName = sel.options[sel.selectedIndex].textContent;
+
+  showStatus(`Running inference on ${kyokuName}...`, false);
+  document.getElementById('turn-nav').style.display = 'none';
+  document.getElementById('opp-grid').innerHTML = '';
+  document.getElementById('wall-section').innerHTML = '';
+
+  try {
+    const res  = await fetch('/api/infer', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ url, kyoku_idx, honba, player, checkpoint }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      showStatus('Error: ' + data.error + (data.trace ? '\n' + data.trace : ''), true);
+      return;
+    }
+
+    turnsData   = data.turns;
+    currentTurn = 0;
+    logId       = data.log_id;
+
+    // Set up replay link
+    const link = document.getElementById('replay-link');
+    link.href  = `https://tenhou.net/5/?log=${logId}&tw=${player}`;
+    link.style.display = '';
+
+    renderTurn(0);
+    showStatus(
+      `${kyokuName} — ${data.n_turns} turns loaded (checkpoint epoch ${data.epoch ?? '?'}).`,
+      false
+    );
+  } catch (e) {
+    showStatus('Network error: ' + e.message, true);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Turn navigation
+// ---------------------------------------------------------------------------
+function changeTurn(delta) {
+  const next = currentTurn + delta;
+  if (next < 0 || next >= turnsData.length) return;
+  renderTurn(next);
+}
+
+function renderTurn(idx) {
+  currentTurn = idx;
+  const turn  = turnsData[idx];
+
+  document.getElementById('turn-nav').style.display = '';
+  document.getElementById('turn-counter').textContent =
+    `Turn ${idx + 1} / ${turnsData.length}`;
+  document.getElementById('live-tiles').textContent =
+    `${turn.live_tiles} live tiles`;
+  document.getElementById('own-hand').textContent = turn.own_hand.join(' ');
+  document.getElementById('prev-btn').disabled = (idx === 0);
+  document.getElementById('next-btn').disabled = (idx === turnsData.length - 1);
+
+  // Opponents
+  const grid = document.getElementById('opp-grid');
+  grid.innerHTML = '';
+  for (const opp of turn.opponents) {
+    grid.insertAdjacentHTML('beforeend', buildOppCard(opp, turn.seen));
+  }
+
+  // Wall
+  document.getElementById('wall-section').innerHTML = buildWallCard(turn);
+}
+
+// ---------------------------------------------------------------------------
+// Table builders
+// ---------------------------------------------------------------------------
+function buildOppCard(opp, seen) {
+  const title = `Seat ${opp.seat} — ${opp.label}  (${opp.hand_size} tiles)`;
+  const mae   = `MAE: ${opp.mae.toFixed(4)} (base: ${opp.base_mae.toFixed(4)})`;
+
+  let rows = '';
+  for (const suit of SUITS) {
+    let suitRows = '';
+    for (let t = suit.start; t < suit.end; t++) {
+      const ek   = opp.expected[t];
+      const tr   = opp.true_hand[t];
+      const isHonor = (t >= 27 && t < 34);
+      if (!isHonor && ek < 0.01 && tr === 0) continue;
+
+      const probs = opp.probs[t];  // [5]
+      let cells = '';
+      for (let k = 0; k < 5; k++) {
+        const p = probs[k];
+        const isTrue = (k > 0) && (p >= 0.4);
+        // k=0 carries no useful information (almost always dominant) — no color
+        const bg = (k > 0)
+          ? `background:rgba(50,130,255,${(p * 0.85).toFixed(3)});`
+          : '';
+        const cls = isTrue ? ' class="true-mark"' : '';
+        cells += `<td style="${bg}"${cls}>${p.toFixed(3)}</td>`;
+      }
+      // E[k] uses its own scale: max possible is 4 (opponent holds all copies)
+      const ekBg = `background:rgba(60,200,130,${(Math.min(ek / 1.5, 1.0) * 0.9).toFixed(3)});`;
+      const trCls = tr > 0 ? ' class="true-pos"' : '';
+      suitRows += `<tr>
+        <td>${TILE_NAMES[t]}</td>
+        ${cells}
+        <td style="${ekBg}">${ek.toFixed(3)}</td>
+        <td${trCls}>${tr}</td>
+      </tr>`;
+    }
+    if (suitRows) {
+      rows += `<tr class="suit-header"><td colspan="8">${suit.name}</td></tr>${suitRows}`;
+    }
+  }
+
+  return `
+  <div class="card">
+    <div class="card-title">
+      <span>${title}</span>
+      <span class="mae">${mae}</span>
+    </div>
+    <div class="card-body">
+      <table>
+        <thead><tr>
+          <th>Tile</th>
+          <th>P(0)</th><th>P(1)</th><th>P(2)</th><th>P(3)</th><th>P(4)</th>
+          <th>E[k]</th><th>True</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function buildWallCard(turn) {
+  const mae = `MAE: ${turn.wall_mae.toFixed(4)} (base: ${turn.wall_base_mae.toFixed(4)})`;
+
+  let rows = '';
+  for (const suit of SUITS) {
+    let suitRows = '';
+    for (let t = suit.start; t < suit.end; t++) {
+      const pred = turn.wall_pred[t];
+      const base = turn.wall_base[t];
+      const tr   = turn.wall_true[t];
+      if (pred < 0.01 && base < 0.01 && tr === 0) continue;
+
+      const dPred = pred - tr;
+      const dBase = base - tr;
+      const trCls = tr > 0 ? ' class="true-pos"' : '';
+      const dPredStyle = Math.abs(dPred) > 0.5 ? `color:${dPred > 0 ? 'var(--red)' : 'var(--green)'}` : '';
+      const dBaseStyle = Math.abs(dBase) > 0.5 ? `color:${dBase > 0 ? 'var(--red)' : 'var(--green)'}` : '';
+      suitRows += `<tr>
+        <td>${TILE_NAMES[t]}</td>
+        <td>${pred.toFixed(2)}</td>
+        <td>${base.toFixed(2)}</td>
+        <td${trCls}>${tr}</td>
+        <td style="${dPredStyle}">${dPred >= 0 ? '+' : ''}${dPred.toFixed(2)}</td>
+        <td style="${dBaseStyle}">${dBase >= 0 ? '+' : ''}${dBase.toFixed(2)}</td>
+      </tr>`;
+    }
+    if (suitRows) {
+      rows += `<tr class="suit-header"><td colspan="6">${suit.name}</td></tr>${suitRows}`;
+    }
+  }
+
+  return `
+  <div class="card wall-card">
+    <div class="card-title">
+      <span>Reconstructed Wall</span>
+      <span class="mae">${mae}</span>
+    </div>
+    <div class="card-body">
+      <table>
+        <thead><tr>
+          <th>Tile</th><th>Model</th><th>Base</th><th>True</th>
+          <th>dModel</th><th>dBase</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Utility
+// ---------------------------------------------------------------------------
+function showStatus(msg, isError) {
+  const bar = document.getElementById('status-bar');
+  bar.textContent = msg;
+  bar.className   = isError ? 'error info' : 'info';
+}
+
+// Hold-to-repeat for prev/next buttons
+(function() {
+  let holdTimer = null, holdInterval = null;
+  function startHold(delta) {
+    changeTurn(delta);
+    holdTimer = setTimeout(() => {
+      holdInterval = setInterval(() => changeTurn(delta), 80);
+    }, 350);
+  }
+  function stopHold() {
+    clearTimeout(holdTimer);
+    clearInterval(holdInterval);
+    holdTimer = holdInterval = null;
+  }
+  ['prev-btn', 'next-btn'].forEach((id, i) => {
+    const delta = i === 0 ? -1 : +1;
+    const btn = document.getElementById(id);
+    btn.addEventListener('mousedown',  e => { if (!btn.disabled) startHold(delta); });
+    btn.addEventListener('mouseup',    stopHold);
+    btn.addEventListener('mouseleave', stopHold);
+    btn.addEventListener('touchstart', e => { e.preventDefault(); if (!btn.disabled) startHold(delta); });
+    btn.addEventListener('touchend',   stopHold);
+  });
+})();
+
+// Keyboard navigation
+document.addEventListener('keydown', e => {
+  if (!turnsData.length) return;
+  if (e.key === 'ArrowLeft')  changeTurn(-1);
+  if (e.key === 'ArrowRight') changeTurn(+1);
+});
+</script>
+</body>
+</html>
